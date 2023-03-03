@@ -8,6 +8,7 @@ from feishu import FeishuBot
 from feishu_event import EventContainer, FeishuEventType, MessageEvent
 from asyncio import sleep, create_task
 import json
+import openai
 load_dotenv()
 
 # chatgpt bot与feishu bot的初始化
@@ -15,6 +16,7 @@ print("Initializing bot...")
 try:
     # gpt bot 配置信息
     config = {}
+    openai.api_key = getenv('OPENAI_API_KEY')
     config["paid"] = getenv('IS_PLUS', 'false').lower() in ('true', 'yes', '1')
     if getenv('CHAT_ACCESS_TOKEN') is not None or getenv('CHAT_SESSION_TOKEN') is not None:
         print("Using access token or session token.")
@@ -46,7 +48,7 @@ async def process_conversation(ec: EventContainer):  # 耗时的对话处理任�
         message_event = MessageEvent.parse_obj(ec.event)
         json_data = json.loads(message_event.message.content)
         if json_data.get('text') is not None:
-            message_receive = json_data['text']
+            message_receive: str = json_data['text']
             if message_receive == '/reset':
                 # 用户指令，重置会话
                 record = feishu_user_to_conversation_map.pop(
@@ -57,6 +59,26 @@ async def process_conversation(ec: EventContainer):  # 耗时的对话处理任�
                     print(
                         f'reset conversation with {message_event.sender.sender_id.user_id} conversation: {record.conversation_id} pid: {record.parent_id}')
                 message_reply = "会话已重置"
+            elif message_receive.startswith('/ask'):
+                # 使用付费api进行问答
+                question = message_receive[4:].strip()
+                response = await openai.ChatCompletion.acreate(
+                    model="gpt-3.5-turbo",
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": "You are ChatGPT, a large language model trained by OpenAI. Respond conversationally"
+                        },
+                        {
+                            "role": "user",
+                            "content": question
+                        }
+                    ])
+                choices = getattr(response, "choices")
+                if choices:
+                    message_reply = choices[0].message.content
+                else:
+                    message_reply = "failed to get answer"
             elif message_event.sender.sender_id.user_id not in feishu_user_to_conversation_map:
                 # 当前没有关于该用户的记录，开始新会话
                 print(
@@ -83,12 +105,12 @@ async def process_conversation(ec: EventContainer):  # 耗时的对话处理任�
         print(e)
 
 
-@app.get("/")
+@ app.get("/")
 async def root():
     return {"message": "Hello World"}
 
 
-@app.post("/bot")
+@ app.post("/bot")
 async def bot(ec: EventContainer, background_tasks: BackgroundTasks):
     try:
         if (FeishuEventType(ec.header.event_type) is FeishuEventType.ReceiveMessage):
@@ -99,7 +121,7 @@ async def bot(ec: EventContainer, background_tasks: BackgroundTasks):
         return ''
 
 
-@app.on_event("startup")
+@ app.on_event("startup")
 def startup_function():
     create_task(schedule_access_token())
 
